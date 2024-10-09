@@ -36,6 +36,30 @@ func Proxy(ctx context.Context, timeout time.Duration, loaclListenAddr, remoteSs
 
 	wg := sync.WaitGroup{}
 	defer wg.Wait()
+	// 启动sshConn定期探活重连，避免断网后永久连接失败
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second * 5):
+				if !isSshLive(sshConn) {
+					c, err := getSshConn(ctx, timeout, remoteSshAddr, sshUser, sshPassword)
+					if err != nil {
+						log.Print("ssh reconnect error: ", err)
+						continue
+					}
+					tmp := sshConn
+					sshConn = c
+					tmp.Close()
+					continue
+				}
+				log.Print("ssh is still alive!!!!!!!!!!!!!!!!!!!!")
+			}
+		}
+	}()
 
 	wg.Add(1)
 	go func() {
@@ -70,6 +94,7 @@ func Proxy(ctx context.Context, timeout time.Duration, loaclListenAddr, remoteSs
 			defer wg.Done()
 			process(ctx, client, sshConn)
 			connCount.Add(-1)
+			log.Print("process goroutine exited")
 		}()
 	}
 }
@@ -91,6 +116,7 @@ func getSshConn(ctx context.Context, timeout time.Duration, remoteSshAddr, sshUs
 		return nil, err
 	}
 	log.Println("ssh conn ok!")
+
 	return conn, nil
 }
 
@@ -112,6 +138,29 @@ func process(ctx context.Context, conn net.Conn, sshConn *ssh.Client) {
 		log.Printf("client %v auth failed:%v", conn.RemoteAddr(), err)
 		return
 	}
+}
+
+// 探测ssh底层连接是否已经断开
+func isSshLive(sshConn *ssh.Client) bool {
+	if sshConn == nil {
+		return false
+	}
+	s, err := sshConn.NewSession()
+	if err != nil {
+		log.Print("ssh new session error: ", err)
+		return false
+	}
+	defer s.Close()
+	respBytes, err := s.Output("echo ok")
+	if err != nil {
+		log.Print("ssh run remote command echo error: ", err)
+		return false
+	}
+	if len(respBytes) == 0 {
+		log.Print("ssh run remote command echo no response")
+		return false
+	}
+	return true
 }
 
 func connect(ctx context.Context, reader *bufio.Reader, conn net.Conn, sshConn *ssh.Client) (err error) {
@@ -203,6 +252,7 @@ func connect(ctx context.Context, reader *bufio.Reader, conn net.Conn, sshConn *
 		_, _ = io.Copy(dest, reader)
 	}()
 	wg.Add(1)
+	// the dest stands for a http/tcp connection over ssh.
 	go func() { // remote http/https response -> local http/https client
 		defer wg.Done()
 		_, _ = io.Copy(conn, dest)

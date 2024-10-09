@@ -7,3 +7,7 @@
 
 # run on linux/mac
 You should use the sshproxy.go's `Proxy` function, and build a binary by changing the main.go on your `machine`(It currently works well only on Windows10.)
+
+# sshproxy.go
+
+The `Proxy` function supports auto-ssh-reconnect.
