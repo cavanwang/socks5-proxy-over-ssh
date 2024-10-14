@@ -9,10 +9,12 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/lionsoul2014/ip2region/binding/golang/xdb"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -22,6 +24,10 @@ const (
 	atypeIPV4 = 0x01
 	atypeHOST = 0x03
 	atypeIPV6 = 0x04
+)
+
+var (
+	forignDomainCache sync.Map
 )
 
 func Proxy(ctx context.Context, timeout time.Duration, loaclListenAddr, remoteSshAddr, sshUser, sshPassword string) error {
@@ -222,12 +228,66 @@ func connect(ctx context.Context, reader *bufio.Reader, conn net.Conn, sshConn *
 
 	reqAddr := fmt.Sprintf("%v:%v", addr, port)
 	log.Println("will ssh forward to: ", reqAddr)
-	dest, err := sshConn.Dial("tcp", reqAddr)
-	if err != nil {
-		return fmt.Errorf("dial dst failed:%w", err)
+
+	// 判断是否为国内网站，国内地址直接转发
+	var isOurCountry bool
+	if forign, ok := forignDomainCache.Load(addr); !ok {
+		timeoutCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second*2))
+		defer cancel()
+		isOurCountryFn := func(addr string) (yes bool, ipAddr string) {
+			// 解析域名对应的IP地址
+			if atyp == atypeHOST {
+				records, err := net.DefaultResolver.LookupIPAddr(timeoutCtx, addr)
+				if err != nil {
+					log.Printf("nslookup %q error: %v", addr, err)
+					return
+				}
+				for _, ip := range records {
+					if strings.Contains(ip.String(), ":") {
+						continue
+					}
+					ipAddr = ip.IP.String()
+					break
+				}
+				log.Printf("nslookup %s got: %s", addr, ipAddr)
+				if ipAddr == "" {
+					return false, ""
+				}
+			} else {
+				ipAddr = addr
+			}
+
+			// 查询IP对应的国家
+			yes = isFromChina(ipAddr)
+			return
+		}
+		isOurCountry, _ = isOurCountryFn(addr)
+		// 记录一下避免下次重复查询
+		forignDomainCache.Store(addr, !isOurCountry)
+		log.Printf("addr %q is ourCountry? %t", addr, isOurCountry)
+	} else {
+		isOurCountry = !forign.(bool)
 	}
-	defer dest.Close()
-	log.Println("dial", addr, port)
+
+	var dest net.Conn
+	// 如果是国内则直接转发
+	if isOurCountry {
+		// 连接到目标服务器
+		dest, err = net.Dial("tcp", reqAddr)
+		if err != nil {
+			log.Printf("Dial %q error: %v", addr, err)
+			return err
+		}
+		defer dest.Close()
+	} else {
+		// 国外网站，走ssh隧道转发
+		dest, err = sshConn.Dial("tcp", reqAddr)
+		if err != nil {
+			return fmt.Errorf("dial dst failed:%w", err)
+		}
+		defer dest.Close()
+	}
+	log.Println("connected to ", addr, port)
 
 	// +----+-----+-------+------+----------+----------+
 	// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -305,4 +365,21 @@ func auth(reader *bufio.Reader, conn net.Conn) (err error) {
 		return fmt.Errorf("write failed:%w", err)
 	}
 	return nil
+}
+
+func isFromChina(ip string) bool {
+	searcher, err := xdb.NewWithFileOnly("./ip.xdb")
+	if err != nil {
+		fmt.Printf("failed to create searcher: %s\n", err.Error())
+		return false
+	}
+
+	defer searcher.Close()
+
+	region, err := searcher.SearchByStr(ip)
+	if err != nil {
+		fmt.Printf("failed to SearchIP(%s): %s\n", ip, err)
+		return false
+	}
+	return strings.HasPrefix(region, "中国")
 }
