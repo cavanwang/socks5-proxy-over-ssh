@@ -97,7 +97,8 @@ func main() {
 	}
 
 	// 设置值，假设设置一个名为 ProxyServer
-	err = k.SetStringValue("ProxyServer", "socks://"+*socksAddr)
+	//err = k.SetStringValue("ProxyServer", "socks://"+*socksAddr)
+	err = k.SetStringValue("ProxyServer", "http://"+*socksAddr)
 	if err != nil {
 		log.Println("设置注册表值ProxyServer失败：", err)
 		return
