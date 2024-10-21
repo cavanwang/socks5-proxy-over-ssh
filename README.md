@@ -12,3 +12,6 @@ You should use the sshproxy.go's `Proxy` function, and build a binary by changin
 # sshproxy.go
 
 The `Proxy` function supports auto-ssh-reconnect.
+
+# contact me
+cavanxf@163.com
