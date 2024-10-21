@@ -26,7 +26,7 @@ var (
 )
 
 func main() {
-	socksAddr := flag.String("socks5_addr", "127.0.0.1:1080", "socks5 listen addr to accept the local connection")
+	socksAddr := flag.String("listen_addr", "127.0.0.1:1080", "proxy server's local listen address")
 	sshTimeout := flag.Int("ssh_timeout", 5, "seconds of timeout for connecting to remote ssh server")
 	sshAddr := flag.String("ssh_addr", "127.0.0.1:22", "remote ssh server address")
 	sshUser := flag.String("ssh_user", "root", "ssh username for remote server")
